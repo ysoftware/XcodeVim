@@ -13,11 +13,13 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#define DEBUG 0
+
 void find_latest_file(const char *directory, char *latest_file, time_t *latest_mtime) {
     DIR *dir = opendir(directory);
     if (!dir) {
         fprintf(stderr, "Unable to access directory: %s\n", directory);
-        return;
+        exit(1);
     }
 
     struct dirent *entry;
@@ -83,25 +85,31 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
             }
 
             if (*p == '#') { // integer
+#if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
+#endif
+#if DEBUG
                 fprintf(output, "[type: \"int\", value: %" PRIu64 "]\n", value);
+#endif
 
                 if (next_int_is_line) {
                     next_int_is_line = false;
                     next_int_is_column = true;
                     line = value;
-                    printf("found line\n");
+                    /* printf("found line\n"); */
                 } else if (next_int_is_column) {
                     next_int_is_column = false;
                     column = value;
-                    printf("found column\n");
+                    /* printf("found column\n"); */
                 }
 
                 p++;
             } else if (*p == '^') { // double
                 double double_value = *((double*)&hex_value);
                 double_value = __builtin_bswap64(hex_value);  // Convert from little-endian
+#if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
+#endif
                 fprintf(output, "[type: \"double\", value: %f]\n", double_value);
                 p++;
             } else if (*p == '@') { // classInstance with index of declared class
@@ -114,16 +122,22 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
                     /* printf("\n>>> IDEDiagnosticActivityLogMessage\n"); */
                     found_diagnostic_activity_log_message = true;
                     next_string_is_message = true;
+                    next_string_is_log_type = false;
+                    next_string_is_file = false;
                 } else if (found_diagnostic_activity_log_message && strcmp(class_name, "DVTTextDocumentLocation") == 0) {
                     /* printf(" - Found DVTTextDocumentLocation following IDEDiagnosticActivityLogMessage\n"); */
                     next_string_is_file = true;
                     next_int_is_line = true;
                 } else {
-                    /* printf("found something else..... %s\n", class_name); */
+                    /* printf("found something else..... '%s'\n", class_name); */
                     found_diagnostic_activity_log_message = false;
+                    next_string_is_file = false;
+                    next_int_is_line = false;
                 }
 
+#if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
+#endif
                 fprintf(output, "[type: \"classInstance\", value: \"%s\"]\n", class_name);
                 next_padded_instances--;
                 p++;
@@ -147,20 +161,21 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
                         next_string_is_log_type = false;
 
                         if (strcmp(str_value, "Swift Compiler Error") == 0) {
-                            // confirmed! gather up all data
-                            fprintf(output_log, "%s:%d:%d: %s", file_name, line + 1, column + 1, message);
-                            printf("Found swift compiler error\n");
-                            printf("%s:%d:%d: %s", file_name, line + 1, column + 1, message);
+                            fprintf(output_log, "%s:%d:%d: %s\n", file_name, line + 1, column + 1, message);
+                            /* printf("%s:%d:%d: %s\n", file_name, line + 1, column + 1, message); */
+                            /* printf("Found swift compiler error\n\n"); */
                         } else {
                             /* printf(" - Nope! the string was '%s'\n\n", str_value); */
                             found_diagnostic_activity_log_message = false;
                         }
                     }
-                } else {
-                    free(str_value);
                 }
 
+                // free(str_value); // who cares
+
+#if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
+#endif
                 fprintf(output, "[type: \"string\", length: %llu, value: \"%s\"]\n", value, str_value);
                 p += value;
             } else if (*p == '%') { // className
@@ -169,26 +184,33 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
                 strncpy(str_value, p, value);
                 str_value[value] = '\0';
                 p += value;
+#if DEBUG
                 fprintf(output, "[type: \"className\", index: %d, value: \"%s\"]\n", classes_found, str_value);
+#endif
                 classes[classes_found] = str_value;
                 classes_found++;
-                free(str_value);
+
+                // free(str_value); // leak all class names, because we use them later
             } else if (*p == '(') {
                 next_padded_instances = value;
+#if DEBUG
                 fprintf(output, "[type: \"array\", count: %" PRIu64 "]\n", value);
+#endif
                 p++;
             } else { // unexpected
                 fprintf(stderr, "[ERROR] Unexpected token %c after a number.\n", *p);
                 exit(1);
             }
         } else if (*p == '-') {
+#if DEBUG
             if (next_padded_instances > 0) { fprintf(output, "    "); }
+#endif
             fprintf(output, "[type: \"null\"]\n");
             p++;
         } else if (*p == '\n') {
             p++;
         } else if (*p == '\0') {
-            printf("[EOF]\n");
+            /* printf("[EOF]\n"); */
         } else {
             fprintf(stderr, "[ERROR] Unexpected token '%c'.\n", *p);
             exit(1);
@@ -198,14 +220,13 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <derived-data-dir> <quickfix.log>\n", argv[0]);
-        return 1;
-    }
+    char path[250];
+    const char *home_dir = getenv("HOME");
+    sprintf(path, "%s/Library/Developer/Xcode/DerivedData", home_dir);
 
     char latest_file[1024] = {0};
     time_t latest_mtime = 0;
-    find_latest_file(argv[1], latest_file, &latest_mtime);
+    find_latest_file(path, latest_file, &latest_mtime);
     if (strlen(latest_file) > 0) {
         printf("Found latest log: %s\n", latest_file);
     } else {
@@ -219,11 +240,13 @@ int main(int argc, char *argv[]) {
     }
 
     FILE *output = fopen("log-dump.txt", "w");
+#if DEBUG
     if (!output) {
         perror("Failed to open output file");
         gzclose(gz_input);
         return 1;
     }
+#endif
 
     FILE *output_log = fopen(argv[2], "w");
     if (!output_log) {
@@ -238,7 +261,9 @@ int main(int argc, char *argv[]) {
     parse_xcactivitylog(buffer, output, output_log);
 
     gzclose(gz_input);
+#if DEBUG
     fclose(output);
+#endif
     fclose(output_log);
 
     return 0;

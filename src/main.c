@@ -14,6 +14,7 @@
 #include <time.h>
 
 #define DEBUG 0
+#define PROJECT_NAME "C24MobileSimOnly"
 
 void find_latest_file(const char *directory, char *latest_file, time_t *latest_mtime) {
     DIR *dir = opendir(directory);
@@ -25,6 +26,20 @@ void find_latest_file(const char *directory, char *latest_file, time_t *latest_m
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // this is how we skip all other folders
+        if (strstr(directory, PROJECT_NAME) == NULL) {
+            // when PROJECT_PATH is not included in the dir, this means we didn't open it yet - keep looking
+            if (strstr(entry->d_name, PROJECT_NAME) != NULL) {
+                continue;
+            }
+        } else if (strstr(directory, "Build") == NULL) {
+            if (strstr(entry->d_name, "Build") != NULL) {
+                continue;
+            }
+        } else if (strstr(entry->d_name, "Logs") != NULL) {
             continue;
         }
 
@@ -46,6 +61,7 @@ void find_latest_file(const char *directory, char *latest_file, time_t *latest_m
             }
         }
     }
+
     closedir(dir);
 }
 
@@ -87,8 +103,6 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
             if (*p == '#') { // integer
 #if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
-#endif
-#if DEBUG
                 fprintf(output, "[type: \"int\", value: %" PRIu64 "]\n", value);
 #endif
 
@@ -109,8 +123,8 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
                 double_value = __builtin_bswap64(hex_value);  // Convert from little-endian
 #if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
-#endif
                 fprintf(output, "[type: \"double\", value: %f]\n", double_value);
+#endif
                 p++;
             } else if (*p == '@') { // classInstance with index of declared class
                 char *class_name = classes[value];
@@ -137,8 +151,8 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
 
 #if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
-#endif
                 fprintf(output, "[type: \"classInstance\", value: \"%s\"]\n", class_name);
+#endif
                 next_padded_instances--;
                 p++;
             } else if (*p == '"' || *p == '*') { // string
@@ -175,8 +189,8 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
 
 #if DEBUG
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
-#endif
                 fprintf(output, "[type: \"string\", length: %llu, value: \"%s\"]\n", value, str_value);
+#endif
                 p += value;
             } else if (*p == '%') { // className
                 p++;
@@ -204,8 +218,8 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
         } else if (*p == '-') {
 #if DEBUG
             if (next_padded_instances > 0) { fprintf(output, "    "); }
-#endif
             fprintf(output, "[type: \"null\"]\n");
+#endif
             p++;
         } else if (*p == '\n') {
             p++;
@@ -239,8 +253,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    FILE *output = fopen("log-dump.txt", "w");
+    FILE *output;
 #if DEBUG
+    output = fopen("log-dump.txt", "w");
     if (!output) {
         perror("Failed to open output file");
         gzclose(gz_input);

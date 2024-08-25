@@ -16,6 +16,9 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
     }
     p += 4;
 
+    int classes_found = 1;
+    char *classes[10];
+
     while (*p != '\0') {
         if (*p >= '0' && *p <= '9' || *p >= 'a' && *p <= 'f') {
             uint64_t value = 0;
@@ -35,8 +38,8 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
                 fprintf(output, "[type: \"double\", value: %f]\n", double_value);
                 p++;
             } else if (*p == '@') { // classInstance with index of declared class
-                // since we don't care about these classes yet, just print out the number
-                fprintf(output, "[type: \"classInstance\", value: %" PRIu64 "]\n", value);
+                char *class_name = classes[value];
+                fprintf(output, "[type: \"classInstance\", value: \"%s\"]\n", class_name);
                 p++;
             } else if (*p == '"' || *p == '*') { // string
                 p++;
@@ -52,8 +55,10 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
                 strncpy(str_value, p, value);
                 str_value[value] = '\0';
                 p += value;
-                fprintf(output, "[type: \"className\", value: \"%s\"]\n", str_value);
-                free(str_value);
+                fprintf(output, "[type: \"className\", index: %d, value: \"%s\"]\n", classes_found, str_value);
+                classes[classes_found] = str_value;
+                classes_found++;
+                /* free(str_value); */ // let it leak
             } else if (*p == '(') {
                 fprintf(output, "[type: \"array\", count: %" PRIu64 "]\n", value);
                 p++;

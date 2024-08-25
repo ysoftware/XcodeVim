@@ -32,15 +32,17 @@ void find_latest_file(const char *directory, char *latest_file, time_t *latest_m
         // this is how we skip all other folders
         if (strstr(directory, PROJECT_NAME) == NULL) {
             // when PROJECT_PATH is not included in the dir, this means we didn't open it yet - keep looking
-            if (strstr(entry->d_name, PROJECT_NAME) != NULL) {
+            if (strstr(entry->d_name, PROJECT_NAME) == NULL) {
+                continue;
+            }
+        } else if (strstr(directory, "Logs") == NULL) {
+            if (strstr(entry->d_name, "Logs") == NULL) {
                 continue;
             }
         } else if (strstr(directory, "Build") == NULL) {
-            if (strstr(entry->d_name, "Build") != NULL) {
+            if (strstr(entry->d_name, "Build") == NULL) {
                 continue;
             }
-        } else if (strstr(entry->d_name, "Logs") != NULL) {
-            continue;
         }
 
         char path[1024];
@@ -230,7 +232,7 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
             exit(1);
         }
     }
-    printf("Finished work: %d\n", *p == '\0');
+    printf("Finished work\n");
 }
 
 int main(int argc, char *argv[]) {

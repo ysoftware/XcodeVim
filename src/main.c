@@ -6,9 +6,48 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#define BUFFER_SIZE 20000000
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <time.h>
 
-void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log) {
+void find_latest_file(const char *directory, char *latest_file, time_t *latest_mtime) {
+    DIR *dir = opendir(directory);
+    if (!dir) {
+        fprintf(stderr, "Unable to access directory: %s\n", directory);
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+
+        struct stat file_stat;
+        if (stat(path, &file_stat) == -1) {
+            /* fprintf(stderr, "Unable to read: %s\n", path); */
+            continue;
+        }
+
+        if (S_ISDIR(file_stat.st_mode)) {
+            find_latest_file(path, latest_file, latest_mtime);
+        } else if (S_ISREG(file_stat.st_mode) && strstr(entry->d_name, ".xcactivitylog") != NULL) {
+            if (file_stat.st_mtime > *latest_mtime) {
+                *latest_mtime = file_stat.st_mtime;
+                strcpy(latest_file, path);
+            }
+        }
+    }
+    closedir(dir);
+}
+
+void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
     const char *p = input;
 
     if (strncmp(p, "SLF0", 4) != 0) {
@@ -51,9 +90,11 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log
                     next_int_is_line = false;
                     next_int_is_column = true;
                     line = value;
+                    printf("found line\n");
                 } else if (next_int_is_column) {
                     next_int_is_column = false;
                     column = value;
+                    printf("found column\n");
                 }
 
                 p++;
@@ -68,16 +109,17 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log
             
                 if (strcmp(class_name, "IDEDiagnosticActivityLogMessage") == 0) {
                     if (found_diagnostic_activity_log_message) {
-                        printf("WTF! WE ARE ALREADY LOOKING AT ONE\n");
+                        /* printf("WTF! WE ARE ALREADY LOOKING AT ONE\n"); */
                     }
-                    printf("\n>>> IDEDiagnosticActivityLogMessage\n");
+                    /* printf("\n>>> IDEDiagnosticActivityLogMessage\n"); */
                     found_diagnostic_activity_log_message = true;
                     next_string_is_message = true;
                 } else if (found_diagnostic_activity_log_message && strcmp(class_name, "DVTTextDocumentLocation") == 0) {
-                    printf(" - Found DVTTextDocumentLocation following IDEDiagnosticActivityLogMessage\n");
+                    /* printf(" - Found DVTTextDocumentLocation following IDEDiagnosticActivityLogMessage\n"); */
                     next_string_is_file = true;
+                    next_int_is_line = true;
                 } else {
-                    printf("found something else..... %s\n", class_name);
+                    /* printf("found something else..... %s\n", class_name); */
                     found_diagnostic_activity_log_message = false;
                 }
 
@@ -95,10 +137,10 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log
                     if (next_string_is_message) {
                         message = str_value;
                         next_string_is_message = false;
-                        printf(" - Found Message: %s\n", message);
+                        /* printf(" - Found Message: %s\n", message); */
                     } else if (next_string_is_file) {
                         file_name = str_value;
-                        printf(" - File name: %s\n", file_name);
+                        /* printf(" - File name: %s\n", file_name); */
                         next_string_is_file = false;
                         next_string_is_log_type = true;
                     } else if (next_string_is_log_type) {
@@ -106,18 +148,20 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log
 
                         if (strcmp(str_value, "Swift Compiler Error") == 0) {
                             // confirmed! gather up all data
-                            fprintf(output_log, "%s:%d:%d: %s", file_name, line, column, message);
+                            fprintf(output_log, "%s:%d:%d: %s", file_name, line + 1, column + 1, message);
                             printf("Found swift compiler error\n");
+                            printf("%s:%d:%d: %s", file_name, line + 1, column + 1, message);
                         } else {
-                            printf(" - Nope! the string was '%s'\n\n", str_value);
+                            /* printf(" - Nope! the string was '%s'\n\n", str_value); */
                             found_diagnostic_activity_log_message = false;
                         }
                     }
+                } else {
+                    free(str_value);
                 }
 
                 if (next_padded_instances > 0) { fprintf(output, "    "); }
-                fprintf(output, "[type: \"string\", length: %lu, value: \"%s\"]\n", value, str_value);
-                /* free(str_value); */ // let it leak
+                fprintf(output, "[type: \"string\", length: %llu, value: \"%s\"]\n", value, str_value);
                 p += value;
             } else if (*p == '%') { // className
                 p++;
@@ -128,7 +172,7 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log
                 fprintf(output, "[type: \"className\", index: %d, value: \"%s\"]\n", classes_found, str_value);
                 classes[classes_found] = str_value;
                 classes_found++;
-                /* free(str_value); */ // let it leak
+                free(str_value);
             } else if (*p == '(') {
                 next_padded_instances = value;
                 fprintf(output, "[type: \"array\", count: %" PRIu64 "]\n", value);
@@ -154,31 +198,41 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <input.xcactivitylog> <output.txt>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <derived-data-dir> <quickfix.log>\n", argv[0]);
         return 1;
     }
 
-    gzFile gz_input = gzopen(argv[1], "rb");
+    char latest_file[1024] = {0};
+    time_t latest_mtime = 0;
+    find_latest_file(argv[1], latest_file, &latest_mtime);
+    if (strlen(latest_file) > 0) {
+        printf("Found latest log: %s\n", latest_file);
+    } else {
+        printf("No .xcactivitylog files found.\n");
+    }
+
+    gzFile gz_input = gzopen(latest_file, "rb");
     if (!gz_input) {
         perror("Failed to open gzipped file");
         return 1;
     }
 
-    FILE *output = fopen(argv[2], "w");
+    FILE *output = fopen("log-dump.txt", "w");
     if (!output) {
         perror("Failed to open output file");
         gzclose(gz_input);
         return 1;
     }
 
-    FILE *output_log = fopen(argv[3], "w");
+    FILE *output_log = fopen(argv[2], "w");
     if (!output_log) {
         perror("Failed to open error log file");
         gzclose(gz_input);
         return 1;
     }
 
+    const int BUFFER_SIZE = 100000000; // 100 MB cuz M2 is a supercomputer
     char *buffer = (char*) malloc(BUFFER_SIZE);
     gzread(gz_input, buffer, BUFFER_SIZE);
     parse_xcactivitylog(buffer, output, output_log);

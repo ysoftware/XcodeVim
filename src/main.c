@@ -67,7 +67,7 @@ void find_latest_file(const char *directory, char *latest_file, time_t *latest_m
     closedir(dir);
 }
 
-void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
+void parse_xcactivitylog(char *input, FILE *output) {
     const char *p = input;
 
     if (strncmp(p, "SLF0", 4) != 0) {
@@ -177,7 +177,7 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
                         next_string_is_log_type = false;
 
                         if (strcmp(str_value, "Swift Compiler Error") == 0) {
-                            fprintf(output_log, "%s:%d:%d: %s\n", file_name, line + 1, column + 1, message);
+                            printf("%s:%d:%d: %s\n", file_name, line + 1, column + 1, message);
                             /* printf("%s:%d:%d: %s\n", file_name, line + 1, column + 1, message); */
                             /* printf("Found swift compiler error\n\n"); */
                         } else {
@@ -232,7 +232,6 @@ void parse_xcactivitylog(char *input, FILE *output, FILE *output_log) {
             exit(1);
         }
     }
-    printf("Finished work\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -244,7 +243,6 @@ int main(int argc, char *argv[]) {
     time_t latest_mtime = 0;
     find_latest_file(path, latest_file, &latest_mtime);
     if (strlen(latest_file) > 0) {
-        printf("Found latest log: %s\n", latest_file);
     } else {
         printf("No .xcactivitylog files found.\n");
     }
@@ -265,23 +263,22 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-    FILE *output_log = fopen(argv[2], "w");
-    if (!output_log) {
-        perror("Failed to open error log file");
-        gzclose(gz_input);
-        return 1;
-    }
+    /* FILE *output_log = fopen("error.log", "w"); */
+    /* if (!output_log) { */
+    /*     perror("Failed to open error log file"); */
+    /*     gzclose(gz_input); */
+    /*     return 1; */
+    /* } */
 
     const int BUFFER_SIZE = 100000000; // 100 MB cuz M2 is a supercomputer
     char *buffer = (char*) malloc(BUFFER_SIZE);
     gzread(gz_input, buffer, BUFFER_SIZE);
-    parse_xcactivitylog(buffer, output, output_log);
+    parse_xcactivitylog(buffer, output);
 
     gzclose(gz_input);
 #if DEBUG
     fclose(output);
 #endif
-    fclose(output_log);
 
     return 0;
 }

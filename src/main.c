@@ -4,10 +4,11 @@
 #include <stdint.h>
 #include <zlib.h>
 #include <inttypes.h>
+#include <stdbool.h>
 
 #define BUFFER_SIZE 20000000
 
-void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
+void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output, FILE *output_log) {
     const char *p = input;
 
     if (strncmp(p, "SLF0", 4) != 0) {
@@ -16,7 +17,20 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
     }
     p += 4;
 
+    // important data
+    bool found_diagnostic_activity_log_message = false;
+    bool next_string_is_message = false;
+    bool next_string_is_file = false;
+    bool next_string_is_log_type = false;
+    bool next_int_is_line = false;
+    bool next_int_is_column = false;
+    char *message;
+    char *file_name;
+    int line;
+    int column;
+
     int classes_found = 1;
+    int next_padded_instances = 0; // to print arrays
     char *classes[10];
 
     while (*p != '\0') {
@@ -30,24 +44,80 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
             }
 
             if (*p == '#') { // integer
+                if (next_padded_instances > 0) { fprintf(output, "    "); }
                 fprintf(output, "[type: \"int\", value: %" PRIu64 "]\n", value);
+
+                if (next_int_is_line) {
+                    next_int_is_line = false;
+                    next_int_is_column = true;
+                    line = value;
+                } else if (next_int_is_column) {
+                    next_int_is_column = false;
+                    column = value;
+                }
+
                 p++;
             } else if (*p == '^') { // double
                 double double_value = *((double*)&hex_value);
                 double_value = __builtin_bswap64(hex_value);  // Convert from little-endian
+                if (next_padded_instances > 0) { fprintf(output, "    "); }
                 fprintf(output, "[type: \"double\", value: %f]\n", double_value);
                 p++;
             } else if (*p == '@') { // classInstance with index of declared class
                 char *class_name = classes[value];
+            
+                if (strcmp(class_name, "IDEDiagnosticActivityLogMessage") == 0) {
+                    if (found_diagnostic_activity_log_message) {
+                        printf("WTF! WE ARE ALREADY LOOKING AT ONE\n");
+                    }
+                    printf("\n>>> IDEDiagnosticActivityLogMessage\n");
+                    found_diagnostic_activity_log_message = true;
+                    next_string_is_message = true;
+                } else if (found_diagnostic_activity_log_message && strcmp(class_name, "DVTTextDocumentLocation") == 0) {
+                    printf(" - Found DVTTextDocumentLocation following IDEDiagnosticActivityLogMessage\n");
+                    next_string_is_file = true;
+                } else {
+                    printf("found something else..... %s\n", class_name);
+                    found_diagnostic_activity_log_message = false;
+                }
+
+                if (next_padded_instances > 0) { fprintf(output, "    "); }
                 fprintf(output, "[type: \"classInstance\", value: \"%s\"]\n", class_name);
+                next_padded_instances--;
                 p++;
             } else if (*p == '"' || *p == '*') { // string
                 p++;
                 char *str_value = (char *)malloc(value + 1);
                 strncpy(str_value, p, value);
                 str_value[value] = '\0';  // Null-terminate the string
+
+                if (found_diagnostic_activity_log_message) {
+                    if (next_string_is_message) {
+                        message = str_value;
+                        next_string_is_message = false;
+                        printf(" - Found Message: %s\n", message);
+                    } else if (next_string_is_file) {
+                        file_name = str_value;
+                        printf(" - File name: %s\n", file_name);
+                        next_string_is_file = false;
+                        next_string_is_log_type = true;
+                    } else if (next_string_is_log_type) {
+                        next_string_is_log_type = false;
+
+                        if (strcmp(str_value, "Swift Compiler Error") == 0) {
+                            // confirmed! gather up all data
+                            fprintf(output_log, "%s:%d:%d: %s", file_name, line, column, message);
+                            printf("Found swift compiler error\n");
+                        } else {
+                            printf(" - Nope! the string was '%s'\n\n", str_value);
+                            found_diagnostic_activity_log_message = false;
+                        }
+                    }
+                }
+
+                if (next_padded_instances > 0) { fprintf(output, "    "); }
                 fprintf(output, "[type: \"string\", length: %lu, value: \"%s\"]\n", value, str_value);
-                free(str_value);
+                /* free(str_value); */ // let it leak
                 p += value;
             } else if (*p == '%') { // className
                 p++;
@@ -60,6 +130,7 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
                 classes_found++;
                 /* free(str_value); */ // let it leak
             } else if (*p == '(') {
+                next_padded_instances = value;
                 fprintf(output, "[type: \"array\", count: %" PRIu64 "]\n", value);
                 p++;
             } else { // unexpected
@@ -67,6 +138,7 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
                 exit(1);
             }
         } else if (*p == '-') {
+            if (next_padded_instances > 0) { fprintf(output, "    "); }
             fprintf(output, "[type: \"null\"]\n");
             p++;
         } else if (*p == '\n') {
@@ -82,7 +154,7 @@ void parse_xcactivitylog(char input[BUFFER_SIZE], FILE *output) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
+    if (argc != 4) {
         fprintf(stderr, "Usage: %s <input.xcactivitylog> <output.txt>\n", argv[0]);
         return 1;
     }
@@ -100,12 +172,20 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    FILE *output_log = fopen(argv[3], "w");
+    if (!output_log) {
+        perror("Failed to open error log file");
+        gzclose(gz_input);
+        return 1;
+    }
+
     char *buffer = (char*) malloc(BUFFER_SIZE);
     gzread(gz_input, buffer, BUFFER_SIZE);
-    parse_xcactivitylog(buffer, output);
+    parse_xcactivitylog(buffer, output, output_log);
 
     gzclose(gz_input);
     fclose(output);
+    fclose(output_log);
 
     return 0;
 }

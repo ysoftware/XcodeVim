@@ -74,19 +74,23 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
     }
     p += 4;
 
-    int classes_found = 1;
-    char *classes[10];
-
-    // important data
+    // flags to see which step we are on
     bool found_diagnostic_activity_log_message = false;
     bool next_string_is_message = false;
     bool next_string_is_file = false;
     bool next_string_is_log_type = false;
     bool next_int_is_line = false;
     bool next_int_is_column = false;
+
+    // number of encountered LogMessage in the row
+    // we reset message collection if we see too many
+    int found_log_messages = 0;
     
     // gathering data
-    char *messages[10];
+    char *classes[10];
+    int classes_found = 1;
+    
+    char *messages[10]; // collected LogMessage strings
     char messages_count = 0;
     char *file_name;
     int line;
@@ -121,6 +125,19 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                     fprintf(output, "[type: \"double\", value: not parsed]\n");
                 }
                 p++;
+            } else if (*p == '%') { // className
+                p++;
+                char *str_value = (char *)malloc(value + 1);
+                strncpy(str_value, p, value);
+                str_value[value] = '\0';
+                p += value;
+                if (output_full_log) {
+                    fprintf(output, "[type: \"className\", index: %d, value: \"%s\"]\n", classes_found, str_value);
+                }
+                classes[classes_found] = str_value;
+                classes_found++;
+
+                // free(str_value); // leak all class names, because we use them
             } else if (*p == '@') { // classInstance
                 char *class_name = classes[value];
 
@@ -129,11 +146,15 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                     next_string_is_message = true;
                     next_string_is_log_type = false;
                     next_string_is_file = false;
+                    found_log_messages++;
+                    if (found_log_messages > 5) {
+                        found_log_messages = 0;
+                        messages_count = 0;
+                    }
                 } else if (found_diagnostic_activity_log_message && strcmp(class_name, "DVTTextDocumentLocation") == 0) {
                     next_string_is_file = true;
                     next_int_is_line = true;
                 } else {
-                    found_diagnostic_activity_log_message = false;
                     next_string_is_file = false;
                     next_int_is_line = false;
                 }
@@ -152,7 +173,7 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                     if (next_string_is_message) {
                         messages[messages_count] = str_value;
                         messages_count++;
-                        /* next_string_is_message = false; */
+                        next_string_is_message = false;
                     } else if (next_string_is_file) {
                         file_name = str_value;
                         next_string_is_file = false;
@@ -161,12 +182,19 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                         next_string_is_log_type = false;
 
                         if (strcmp(str_value, "Swift Compiler Error") == 0) {
-                            printf("%s:%d:%d:\n", file_name, line + 1, column + 1);
+                            printf("%s:%d:%d\n", file_name, line + 1, column + 1);
                             
                             for (int i = 0; i < messages_count; i++) {
-                                printf("|| %s\n", messages[i]);
+                                printf("%s\n", messages[i]);
                             }
+                            printf("\n");
                             found_diagnostic_activity_log_message = false;
+                            messages_count = 0;
+                            found_log_messages = 0;
+                        } else if (strcmp(str_value, "Swift Compiler Notice") != 0) {
+                            found_diagnostic_activity_log_message = false;
+                            messages_count = 0;
+                            found_log_messages = 0;
                         }
                     }
                 }
@@ -177,19 +205,6 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                     fprintf(output, "[type: \"string\", length: %llu, value: \"%s\"]\n", value, str_value);
                 }
                 p += value;
-            } else if (*p == '%') { // className
-                p++;
-                char *str_value = (char *)malloc(value + 1);
-                strncpy(str_value, p, value);
-                str_value[value] = '\0';
-                p += value;
-                if (output_full_log) {
-                    fprintf(output, "[type: \"className\", index: %d, value: \"%s\"]\n", classes_found, str_value);
-                }
-                classes[classes_found] = str_value;
-                classes_found++;
-
-                // free(str_value); // leak all class names, because we use them later
             } else if (*p == '(') {
                 if (output_full_log) {
                     fprintf(output, "[type: \"array\", count: %" PRIu64 "]\n", value);
@@ -207,7 +222,7 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
         } else if (*p == '\n') {
             p++;
         } else if (*p == '\0') {
-            /* printf("[EOF]\n"); */
+            // end of file
         } else {
             fprintf(stderr, "[ERROR] Unexpected token '%c'.\n", *p);
             exit(1);

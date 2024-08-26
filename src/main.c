@@ -74,6 +74,9 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
     }
     p += 4;
 
+    int classes_found = 1;
+    char *classes[10];
+
     // important data
     bool found_diagnostic_activity_log_message = false;
     bool next_string_is_message = false;
@@ -82,15 +85,12 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
     bool next_int_is_line = false;
     bool next_int_is_column = false;
     
+    // gathering data
     char *messages[10];
     char messages_count = 0;
-
     char *file_name;
     int line;
     int column;
-
-    int classes_found = 1;
-    char *classes[10];
 
     while (*p != '\0') {
         if (*p >= '0' && *p <= '9' || *p >= 'a' && *p <= 'f') {
@@ -150,7 +150,8 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
 
                 if (found_diagnostic_activity_log_message) {
                     if (next_string_is_message) {
-                        last_message = str_value;
+                        messages[messages_count] = str_value;
+                        messages_count++;
                         /* next_string_is_message = false; */
                     } else if (next_string_is_file) {
                         file_name = str_value;
@@ -160,7 +161,11 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                         next_string_is_log_type = false;
 
                         if (strcmp(str_value, "Swift Compiler Error") == 0) {
-                            printf("%s:%d:%d: %s\n", file_name, line + 1, column + 1, message);
+                            printf("%s:%d:%d:\n", file_name, line + 1, column + 1);
+                            
+                            for (int i = 0; i < messages_count; i++) {
+                                printf("|| %s\n", messages[i]);
+                            }
                             found_diagnostic_activity_log_message = false;
                         }
                     }
@@ -276,7 +281,6 @@ int main(int argc, char *argv[]) {
 /* [type: "int", value: 746354466] */
 /* [type: "int", value: 18446744073709551615] */
 /* [type: "int", value: 0] */
-
 /* [type: "array", count: 1] */
 /*     [type: "classInstance", value: "IDEDiagnosticActivityLogMessage"] */
 /*     [type: "string", length: 25, value: "To match this opening '{'"] */

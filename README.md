@@ -21,7 +21,7 @@ In VIM, you can populate the quickfix buffer with error output by calling `:cexp
 
 I put this in my .vimrc to bind this command to to **te**:
 ```vimL
-nnoremap te :cexpr system('~/XcodeVim/app.exe')<CR>:copen<CR><CR>
+nnoremap te :cexpr system('~/XcodeVim/app.exe MyApp')<CR>:copen<CR><CR>
 ```
 
 Example of what you get in quickfix:

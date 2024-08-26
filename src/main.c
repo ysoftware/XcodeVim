@@ -81,7 +81,10 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
     bool next_string_is_log_type = false;
     bool next_int_is_line = false;
     bool next_int_is_column = false;
-    char *message;
+    
+    char *messages[10];
+    char messages_count = 0;
+
     char *file_name;
     int line;
     int column;
@@ -147,8 +150,8 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
 
                 if (found_diagnostic_activity_log_message) {
                     if (next_string_is_message) {
-                        message = str_value;
-                        next_string_is_message = false;
+                        last_message = str_value;
+                        /* next_string_is_message = false; */
                     } else if (next_string_is_file) {
                         file_name = str_value;
                         next_string_is_file = false;
@@ -158,7 +161,6 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
 
                         if (strcmp(str_value, "Swift Compiler Error") == 0) {
                             printf("%s:%d:%d: %s\n", file_name, line + 1, column + 1, message);
-                        } else {
                             found_diagnostic_activity_log_message = false;
                         }
                     }
@@ -263,3 +265,57 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
+
+
+// TODO: proper parsing of these classes
+//
+/* [type: "classInstance", value: "IDEDiagnosticActivityLogMessage"] */
+/* [type: "string", length: 21, value: "Expected '}' in class"] */
+/* [type: "null"] */
+/* [type: "int", value: 746354466] */
+/* [type: "int", value: 18446744073709551615] */
+/* [type: "int", value: 0] */
+
+/* [type: "array", count: 1] */
+/*     [type: "classInstance", value: "IDEDiagnosticActivityLogMessage"] */
+/*     [type: "string", length: 25, value: "To match this opening '{'"] */
+/*     [type: "null"] */
+/*     [type: "int", value: 746354466] */
+/*     [type: "int", value: 18446744073709551615] */
+/*     [type: "int", value: 0] */
+/* arr [type: "null"] */
+/*     [type: "int", value: 0] */
+/*     [type: "string", length: 27, value: "com.apple.dt.IDE.diagnostic"] */
+/*         [type: "classInstance", value: "DVTTextDocumentLocation"] */
+/*         [type: "string", length: 177, value: "file:///Users/iaroslav.erokhin/Documents/Check24/ios-pod-mobile-sim/Pod/Classes/CheckoutShared/Features/Checkout/InputManagement/Data%20Sources/CheckoutIBANInputDataSource.swift"] */
+/*         [type: "double", value: not parsed] */
+/*         [type: "int", value: 10] */
+/*         [type: "int", value: 69] */
+/*         [type: "int", value: 10] */
+/*         [type: "int", value: 69] */
+/*         [type: "int", value: 18446744073709551615] */
+/*         [type: "int", value: 0] */
+/*         [type: "int", value: 0] */
+/*         [type: "string", length: 21, value: "Swift Compiler Notice"] */
+/*         [type: "array", count: 0] */
+/*         [type: "null"] */
+
+/* [type: "int", value: 2] */
+/* [type: "string", length: 27, value: "com.apple.dt.IDE.diagnostic"] */
+/* [type: "classInstance", value: "DVTTextDocumentLocation"] */
+/* [type: "string", length: 177, value: "file:///Users/iaroslav.erokhin/Documents/Check24/ios-pod-mobile-sim/Pod/Classes/CheckoutShared/Features/Checkout/InputManagement/Data%20Sources/CheckoutIBANInputDataSource.swift"] */
+/* [type: "double", value: not parsed] */
+/* [type: "int", value: 12] */
+/* [type: "int", value: 4] */
+/* [type: "int", value: 12] */
+/* [type: "int", value: 4] */
+/* [type: "int", value: 18446744073709551615] */
+/* [type: "int", value: 0] */
+/* [type: "int", value: 0] */
+/* [type: "string", length: 20, value: "Swift Compiler Error"] */
+/* [type: "array", count: 0] */
+/* [type: "null"] */
+
+
+// TODO: keep modified time of last build to not open old ones after problem was solved (how does that evne happen? we still have the latest build report which is ok)

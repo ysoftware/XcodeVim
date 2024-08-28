@@ -13,6 +13,8 @@
 #include <sys/stat.h>
 #include <time.h>
 
+const int BUFFER_SIZE = 100000000; // 100 MB is easy for modern computers
+
 void find_latest_file(const char *directory, char *latest_file, time_t *latest_mtime, const char *project_name) {
     DIR *dir = opendir(directory);
     if (!dir) {
@@ -66,14 +68,6 @@ void find_latest_file(const char *directory, char *latest_file, time_t *latest_m
 }
 
 void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
-    const char *p = input;
-
-    if (strncmp(p, "SLF0", 4) != 0) {
-        fprintf(stderr, "[ERROR] Invalid SLF header\n");
-        exit(1);
-    }
-    p += 4;
-
     // flags to see which step we are on
     bool found_diagnostic_activity_log_message = false;
     bool next_string_is_message = false;
@@ -87,25 +81,33 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
     int found_log_messages = 0;
     
     // gathering data
-    char *classes[10];
+    char classes[10][100];
     int classes_found = 1;
     
-    char *messages[10]; // collected LogMessage strings
-    char messages_count = 0;
-    char *file_name;
-    int line;
-    int column;
+    char messages[10][1000]; // collected LogMessage strings
+    int messages_count = 0;
+    char *file_name = NULL;
+    uint64_t line = 0;
+    uint64_t column = 0;
+    
+    if (strncmp(input, "SLF0", 4) != 0) {
+        fprintf(stderr, "[ERROR] Invalid SLF header\n");
+        exit(1);
+    }
+    int i = 4; // skipping header
 
-    while (*p != '\0') {
-        if (*p >= '0' && *p <= '9' || *p >= 'a' && *p <= 'f') {
+    while (i < BUFFER_SIZE) {
+        if ((*(input + i) >= '0' && *(input + i) <= '9') || (*(input + i) >= 'a' && *(input + i) <= 'f')) {
             uint64_t value = 0;
             // to not fail when encountering doubles, we also parse these
-            while ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F')) {
-                value = value * 10 + (*p - '0');
-                (p)++;
+            while ((*(input + i) >= '0' && *(input + i) <= '9') || (*(input + i) >= 'a' && *(input + i) <= 'f') || (*(input + i) >= 'A' && *(input + i) <= 'F')) {
+                *(input + i) = *(input + i);
+                value = value * 10 + (*(input + i) - '0');
+                i++;
             }
 
-            if (*p == '#') { // integer
+            if (*(input + i) == '#') { // integer
+                i++;
                 if (output_full_log) {
                     fprintf(output, "[type: \"int\", value: %" PRIu64 "]\n", value);
                 }
@@ -118,28 +120,24 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                     next_int_is_column = false;
                     column = value;
                 }
-
-                p++;
-            } else if (*p == '^') { // double
+            } else if (*(input + i) == '^') { // double
+                i++;
                 if (output_full_log) {
                     fprintf(output, "[type: \"double\", value: not parsed]\n");
                 }
-                p++;
-            } else if (*p == '%') { // className
-                p++;
-                char *str_value = (char *)malloc(value + 1);
-                strncpy(str_value, p, value);
-                str_value[value] = '\0';
-                p += value;
-                if (output_full_log) {
-                    fprintf(output, "[type: \"className\", index: %d, value: \"%s\"]\n", classes_found, str_value);
-                }
-                classes[classes_found] = str_value;
-                classes_found++;
+            } else if (*(input + i) == '%') { // className
+                i++;
+                strncpy(&classes[classes_found][0], &input[i], value);
+                classes[classes_found][value] = '\0';
 
-                // free(str_value); // leak all class names, because we use them
-            } else if (*p == '@') { // classInstance
-                char *class_name = classes[value];
+                if (output_full_log) {
+                    fprintf(output, "[type: \"className\", length: %llu, index: %d, value: \"%s\"]\n", value, classes_found, classes[classes_found]);
+                }
+                classes_found++;
+                i += value;
+            } else if (*(input + i) == '@') { // classInstance
+                i++;
+                char *class_name = &classes[value][0];
 
                 if (strcmp(class_name, "IDEDiagnosticActivityLogMessage") == 0) {
                     found_diagnostic_activity_log_message = true;
@@ -162,69 +160,73 @@ void parse_xcactivitylog(char *input, FILE *output, bool output_full_log) {
                 if (output_full_log) {
                     fprintf(output, "[type: \"classInstance\", value: \"%s\"]\n", class_name);
                 }
-                p++;
-            } else if (*p == '"' || *p == '*') { // string
-                p++;
-                char *str_value = (char *)malloc(value + 1);
-                strncpy(str_value, p, value);
-                str_value[value] = '\0';  // Null-terminate the string
+            } else if (*(input + i) == '"' || *(input + i) == '*') { // string
+                i++;
 
-                if (found_diagnostic_activity_log_message) {
-                    if (next_string_is_message) {
-                        messages[messages_count] = str_value;
-                        messages_count++;
-                        next_string_is_message = false;
-                    } else if (next_string_is_file) {
-                        file_name = str_value;
-                        next_string_is_file = false;
-                        next_string_is_log_type = true;
-                    } else if (next_string_is_log_type) {
-                        next_string_is_log_type = false;
+                if (value <= 1000) {
+                    char str_value[1000] = {0};
+                    strncpy(str_value, &input[i], value);
 
-                        if (strcmp(str_value, "Swift Compiler Error") == 0) {
-                            printf("%s:%d:%d\n", file_name, line + 1, column + 1);
-                            
-                            for (int i = 0; i < messages_count; i++) {
-                                printf("%s\n", messages[i]);
+                    if (found_diagnostic_activity_log_message) {
+                        if (next_string_is_message) {
+                            messages[messages_count][0] = *str_value;
+                            messages_count++;
+                            next_string_is_message = false;
+                        } else if (next_string_is_file) {
+                            file_name = str_value;
+                            next_string_is_file = false;
+                            next_string_is_log_type = true;
+                        } else if (next_string_is_log_type) {
+                            next_string_is_log_type = false;
+
+                            if (strcmp(str_value, "Swift Compiler Error") == 0) {
+                                printf("%s:%llu:%llu\n", file_name, line + 1, column + 1);
+
+                                for (int i = 0; i < messages_count; i++) {
+                                    printf("%s\n", &messages[i][0]);
+                                }
+                                printf("\n");
+                                found_diagnostic_activity_log_message = false;
+                                messages_count = 0;
+                                found_log_messages = 0;
+                            } else if (strcmp(str_value, "Swift Compiler Notice") != 0) {
+                                found_diagnostic_activity_log_message = false;
+                                messages_count = 0;
+                                found_log_messages = 0;
                             }
-                            printf("\n");
-                            found_diagnostic_activity_log_message = false;
-                            messages_count = 0;
-                            found_log_messages = 0;
-                        } else if (strcmp(str_value, "Swift Compiler Notice") != 0) {
-                            found_diagnostic_activity_log_message = false;
-                            messages_count = 0;
-                            found_log_messages = 0;
                         }
+                    }
+                    if (output_full_log) {
+                        fprintf(output, "[type: \"string\", length: %llu, value: \"%s\"]\n", value, str_value);
+                    }
+                } else {
+                    if (output_full_log) {
+                        fprintf(output, "[type: \"string\", length: %llu, value skipped]\n", value);
                     }
                 }
 
-                // free(str_value); // who cares
-
-                if (output_full_log) {
-                    fprintf(output, "[type: \"string\", length: %llu, value: \"%s\"]\n", value, str_value);
-                }
-                p += value;
-            } else if (*p == '(') {
+                i += value;
+            } else if (*(input + i) == '(') {
                 if (output_full_log) {
                     fprintf(output, "[type: \"array\", count: %" PRIu64 "]\n", value);
                 }
-                p++;
+                i++;
             } else { // unexpected
-                fprintf(stderr, "[ERROR] Unexpected token %c after a number.\n", *p);
+                fprintf(stderr, "[ERROR] Unexpected token '%c' (%d) after a number (%llu) at position %d.\n", *(input+i), (uint8_t)*(input+i), value, i);
                 exit(1);
             }
-        } else if (*p == '-') {
+        } else if (*(input + i) == '-') {
             if (output_full_log) {
                 fprintf(output, "[type: \"null\"]\n");
             }
-            p++;
-        } else if (*p == '\n') {
-            p++;
-        } else if (*p == '\0') {
+            i++;
+        } else if (*(input + i) == '\n') {
+            i++;
+        } else if (*(input + i) == '\0' || *(input + i) == 4) {
             // end of file
+            break;
         } else {
-            fprintf(stderr, "[ERROR] Unexpected token '%c'.\n", *p);
+            fprintf(stderr, "[ERROR] Unexpected token '%c' (%d) at position %d.\n", *(input+i), (uint8_t)*(input+i), i);
             exit(1);
         }
     }
@@ -253,6 +255,9 @@ int main(int argc, char *argv[]) {
     time_t latest_mtime = 0;
     find_latest_file(path, latest_file, &latest_mtime, project_name);
     if (strlen(latest_file) > 0) {
+        if (output_full_log) {
+            printf("Found file: %s\n", latest_file);
+        }
     } else {
         printf("No .xcactivitylog files found.\n");
     }
@@ -273,7 +278,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    const int BUFFER_SIZE = 100000000; // 100 MB is easy for modern computers
     char *buffer = (char*) malloc(BUFFER_SIZE);
     gzread(gz_input, buffer, BUFFER_SIZE);
     parse_xcactivitylog(buffer, output, output_full_log);
